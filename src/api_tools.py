@@ -1,9 +1,13 @@
 import requests
 import time
+import logging
 from datetime import datetime
+from typing import List, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 
-def fetch_top_flights_calendar(api_key, month_str, top_n=4):
+def fetch_top_flights_calendar(api_key: str, month_str: str, top_n: int = 4) -> List[Dict[str, Any]]:
     url = "https://sky-scrapper.p.rapidapi.com/api/v1/flights/getPriceCalendar"
     headers = {
         "x-rapidapi-key": api_key,
@@ -18,18 +22,19 @@ def fetch_top_flights_calendar(api_key, month_str, top_n=4):
             "originSkyId": "MAD", "destinationSkyId": "LPA",
             "fromDate": first_day_of_month, "currency": "EUR"
         })
-        print(f"DEBUG: Status API: {res_out.status_code}")
+        logger.info(f"API Outbound Response Status: {res_out.status_code}")
 
         if res_out.status_code != 200:
-            print(f"DEBUG: Respuesta error: {res_out.text}")
+            logger.error(f"Error payload (Outbound): {res_out.text}")
 
-        print("Esperando 15 segundos para la siguiente consulta...")
+        logger.info("Esperando 15 segundos para evitar bloqueos por Rate Limit de la API...")
         time.sleep(15)
 
         res_ret = requests.get(url, headers=headers, params={
             "originSkyId": "LPA", "destinationSkyId": "MAD",
             "fromDate": first_day_of_month, "currency": "EUR"
         })
+        logger.info(f"API Return Response Status: {res_ret.status_code}")
 
         if res_out.status_code != 200 or res_ret.status_code != 200:
             return []
@@ -38,6 +43,7 @@ def fetch_top_flights_calendar(api_key, month_str, top_n=4):
         data_ret = res_ret.json().get('data', {}).get('flights', {}).get('days', [])
 
         if not data_out or not data_ret:
+            logger.warning("No se encontraron días con vuelos disponibles.")
             return []
 
         out_prices = {d['day']: d['price'] for d in data_out if 'price' in d and d['price'] is not None}
@@ -60,13 +66,14 @@ def fetch_top_flights_calendar(api_key, month_str, top_n=4):
 
         all_flights = sorted(all_flights, key=lambda x: x['price'])
         return all_flights[:top_n]
+
     except Exception as e:
-        print(f"Error: {e}")
+        logger.exception(f"Fallo crítico durante la extracción de vuelos: {e}")
         return []
 
 
-def send_telegram_alert(bot_token, chat_id, best_flight, month_name, avg_price, drop_amount):
-    # Texto dinámico según si ha bajado de la media o no
+def send_telegram_alert(bot_token: str, chat_id: str, best_flight: Dict[str, Any], month_name: str, avg_price: float,
+                        drop_amount: float) -> None:
     if drop_amount > 0:
         status_icon = "📉"
         trend_text = f"¡Está {drop_amount:.2f}€ más barato que la media!"
@@ -87,4 +94,9 @@ def send_telegram_alert(bot_token, chat_id, best_flight, month_name, avg_price, 
         f"🔗 Enlace directo a Skyscanner:\n{best_flight['link']}"
     )
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    requests.post(url, json={"chat_id": chat_id, "text": message})
+
+    try:
+        res = requests.post(url, json={"chat_id": chat_id, "text": message})
+        res.raise_for_status()
+    except Exception as e:
+        logger.error(f"Fallo al enviar el mensaje de Telegram: {e}")
